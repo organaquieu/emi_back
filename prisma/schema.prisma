@@ -1,0 +1,236 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String              @id @default(uuid())
+  email              String?             @unique
+  phone              String?             @unique
+  passwordHash       String
+  role               Role                @default(ALEXITHYMIC)
+  createdAt          DateTime            @default(now())
+  isActive           Boolean             @default(true)
+  alexithymicProfile AlexithymicProfile?
+  therapistProfile   TherapistProfile?
+  consents           Consent[]
+  auditLogs          AuditLog[]
+  tasAttempts        TasAttempt[]
+  aiConsultations    AIConsultation[]
+}
+
+enum Role {
+  ALEXITHYMIC
+  THERAPIST
+  ADMIN
+}
+
+model AlexithymicProfile {
+  userId            String            @id
+  user              User              @relation(fields: [userId], references: [id])
+  code              String?           @unique
+  nickname          String?
+  birthDate         DateTime?
+  therapyStartDate  DateTime?
+  diaryEntries      DiaryEntry[]
+  therapistLinks    TherapistClient[] @relation("AlexithymicLinks")
+}
+
+model TherapistProfile {
+  userId      String            @id
+  user        User              @relation(fields: [userId], references: [id])
+  fullName    String
+  description String?
+  code        String            @unique
+  clientLinks TherapistClient[] @relation("TherapistLinks")
+  sessions    Session[]
+}
+
+model TherapistClient {
+  id             String                @id @default(uuid())
+  therapistId    String
+  alexithymicId  String
+  therapist      TherapistProfile      @relation("TherapistLinks", fields: [therapistId], references: [userId])
+  alexithymic    AlexithymicProfile    @relation("AlexithymicLinks", fields: [alexithymicId], references: [userId])
+  status         TherapistClientStatus @default(ACTIVE)
+  startDate      DateTime              @default(now())
+  endDate        DateTime?
+
+  @@unique([therapistId, alexithymicId])
+}
+
+enum TherapistClientStatus {
+  ACTIVE
+  PAUSED
+  FINISHED
+}
+
+model DiaryEntry {
+  id              String            @id @default(uuid())
+  alexithymicId   String
+  alexithymic     AlexithymicProfile @relation(fields: [alexithymicId], references: [userId])
+  date            DateTime           @default(now())
+  situation       String?
+  thought         String?
+  reaction        String?
+  emotion         String?
+  behavior        String?
+  behaviorAlt     String?
+  tags            String?
+  visibility      Visibility         @default(PRIVATE)
+  isDeleted       Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  emotions        DiaryEntryEmotion[]
+  aiConsultations AIConsultation[]
+  reflection      Reflection?
+}
+
+enum Visibility {
+  PRIVATE
+  THERAPIST
+}
+
+/** Рефлексия после записи дневника (одна на запись). */
+model Reflection {
+  id           String                 @id @default(uuid())
+  diaryEntryId String                 @unique
+  diaryEntry   DiaryEntry             @relation(fields: [diaryEntryId], references: [id], onDelete: Cascade)
+  /** JSON: [{ "name": "Страх", "percent": 80 }] */
+  emotions     Json
+  stateChange  ReflectionStateChange
+  plans        String?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+}
+
+/** Ответ на «Стало ли вам легче после записи?» */
+enum ReflectionStateChange {
+  BETTER
+  SLIGHTLY_BETTER
+  NO_CHANGE
+  WORSE
+}
+
+model DiaryEntryEmotion {
+  id           String        @id @default(uuid())
+  diaryEntryId String
+  emotionId    String
+  diaryEntry   DiaryEntry    @relation(fields: [diaryEntryId], references: [id])
+  emotion      Emotion       @relation(fields: [emotionId], references: [id])
+  confidence   Float         @default(1.0)
+  source       EmotionSource @default(USER)
+}
+
+enum EmotionSource {
+  USER
+  AI
+}
+
+model Emotion {
+  id           String          @id @default(uuid())
+  name         String          @unique
+  category     EmotionCategory
+  valence      Valence
+  arousalLevel Int
+  description  String?
+  hint         String?
+  isArchived   Boolean         @default(false)
+  entries      DiaryEntryEmotion[]
+}
+
+enum EmotionCategory {
+  BASIC
+  COMPLEX
+}
+
+enum Valence {
+  POSITIVE
+  NEGATIVE
+  NEUTRAL
+}
+
+model AIConsultation {
+  id           String     @id @default(uuid())
+  userId       String?
+  user         User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  diaryEntryId String?
+  diaryEntry   DiaryEntry? @relation(fields: [diaryEntryId], references: [id])
+  prompt       String
+  response     String
+  modelVersion String
+  createdAt    DateTime   @default(now())
+}
+
+model Consent {
+  id        String      @id @default(uuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id])
+  type      ConsentType
+  givenAt   DateTime    @default(now())
+  version   String
+  isActive  Boolean     @default(true)
+
+  @@unique([userId, type])
+}
+
+enum ConsentType {
+  DATA_PROCESSING
+  AI_USAGE
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  eventType   String
+  description String?
+  createdAt   DateTime @default(now())
+}
+
+model Session {
+  id           String            @id @default(uuid())
+  therapistId  String
+  therapist    TherapistProfile  @relation(fields: [therapistId], references: [userId])
+  clientId     String
+  date         DateTime
+  duration     Int?
+  sessionType  String?
+  description  String?
+}
+
+model UserTag {
+  id        String  @id @default(uuid())
+  userId    String
+  name      String
+  color     String?
+
+  @@unique([userId, name])
+}
+
+/** Прохождение TAS-20: в БД только агрегаты и время (без ответов по пунктам). */
+model TasAttempt {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completedAt DateTime    @default(now())
+  totalScore  Int
+  difScore    Int
+  ddfScore    Int
+  eotScore    Int
+  category    TasCategory
+
+  @@index([userId, completedAt])
+}
+
+/** Интерпретация суммарного балла TAS-20 (Bagby et al.): ≤51 / 52–60 / ≥61. */
+enum TasCategory {
+  NONE
+  POSSIBLE
+  ALEXITHYMIA
+}
+

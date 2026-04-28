@@ -1,0 +1,56 @@
+<<<<<<< HEAD
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: emihome-app
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+      - ADMINJS_ROOT_PATH=/tmp/.adminjs
+      - ADMINJS_COOKIE_PASSWORD=your-secret-password
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - ./certs:/app/certs:ro
+      - ./adminjs-tmp:/tmp/.adminjs
+    command: npm run start:dev
+    restart: unless-stopped
+    # Run as root temporarily to fix permissions
+=======
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: emihome-app
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+      - ADMINJS_ROOT_PATH=/tmp/.adminjs
+      - ADMINJS_COOKIE_PASSWORD=your-secret-password
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - ./certs:/app/certs:ro
+      - ./adminjs-tmp:/tmp/.adminjs
+    command: npm run start:dev
+    restart: unless-stopped
+    # Run as root temporarily to fix permissions
+>>>>>>> acbf8526c2f17c39e020c1909c60d2a858310090
+    user: root

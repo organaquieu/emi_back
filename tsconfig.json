@@ -1,0 +1,41 @@
+<<<<<<< HEAD
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "useDefineForClassFields": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "types": ["node", "jest"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
+=======
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "useDefineForClassFields": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "types": ["node", "jest"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
+>>>>>>> acbf8526c2f17c39e020c1909c60d2a858310090
