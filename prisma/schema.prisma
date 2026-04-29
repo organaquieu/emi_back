@@ -65,7 +65,6 @@ model TherapistClient {
 
 enum TherapistClientStatus {
   ACTIVE
-  PAUSED
   FINISHED
 }
 

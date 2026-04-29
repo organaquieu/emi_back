@@ -1,12 +1,11 @@
 import { BadRequestException, Body, Controller, ForbiddenException, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiParam, ApiProperty, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { IsEnum, IsString } from 'class-validator';
+import { IsEnum, IsString, IsUUID } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { buildAlexithymicCode } from '../common/utils/profile-codes.js';
 
 enum TherapistClientStatusDto {
   ACTIVE = 'ACTIVE',
-  PAUSED = 'PAUSED',
   FINISHED = 'FINISHED',
 }
 
@@ -35,7 +34,11 @@ class LinkByClientCodeDto {
 }
 
 class UpdateTherapistClientStatusDto {
-  @ApiProperty({ type: String, enum: TherapistClientStatusDto, example: TherapistClientStatusDto.PAUSED })
+  @ApiProperty({ type: String, format: 'uuid', description: 'ID связи therapist-client' })
+  @IsUUID()
+  id!: string;
+
+  @ApiProperty({ type: String, enum: TherapistClientStatusDto, example: TherapistClientStatusDto.ACTIVE })
   @IsEnum(TherapistClientStatusDto)
   status!: TherapistClientStatusDto;
 }
@@ -194,18 +197,27 @@ class TherapistClientsController {
     return this.listLinksWithNames(req.user.sub);
   }
 
-  @Patch('therapist-clients/:id/status')
-  @ApiOperation({ summary: 'Изменить статус связки (ACTIVE/PAUSED/FINISHED)' })
-  @ApiParam({ name: 'id', type: String, description: 'ID связки therapistClient' })
+  @Patch('therapist-client')
+  @ApiOperation({ summary: 'Изменить статус связки (ACTIVE/FINISHED)' })
   @ApiBody({ type: UpdateTherapistClientStatusDto })
-  status(@Param('id') id: string, @Body() body: UpdateTherapistClientStatusDto) { return this.prisma.therapistClient.update({ where: { id }, data: { status: body.status } }); }
+  async status(@Req() req: any, @Body() body: UpdateTherapistClientStatusDto) {
+    const link = await this.prisma.therapistClient.findUnique({ where: { id: body.id } });
+    if (!link || link.therapistId !== req.user.sub) throw new ForbiddenException();
+    return this.prisma.therapistClient.update({
+      where: { id: body.id },
+      data: {
+        status: body.status,
+        endDate: body.status === TherapistClientStatusDto.FINISHED ? new Date() : null,
+      },
+    });
+  }
 
   @Get('therapist-clients/:id/report')
   @ApiOperation({ summary: 'Отчёт по дневнику клиента для терапевта (только visibility=THERAPIST)' })
   @ApiParam({ name: 'id', type: String, description: 'ID связки therapistClient' })
   async report(@Req() req: any, @Param('id') id: string) {
     const link = await this.prisma.therapistClient.findUnique({ where: { id } });
-    if (!link || link.therapistId !== req.user.sub) throw new ForbiddenException();
+    if (!link || link.therapistId !== req.user.sub || link.status !== 'ACTIVE') throw new ForbiddenException();
     return this.prisma.diaryEntry.findMany({ where: { alexithymicId: link.alexithymicId, visibility: 'THERAPIST', isDeleted: false } });
   }
 }
