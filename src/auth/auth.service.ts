@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ChangePasswordDto, LoginDto, RegisterDto } from './auth.dto.js';
+import { buildAlexithymicCode } from '../common/utils/profile-codes.js';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -28,7 +29,7 @@ export class AuthService {
       let clientCode: string | null = null;
       if (dto.role === Role.ALEXITHYMIC) {
         const profile = await this.prisma.alexithymicProfile.create({
-          data: { userId: user.id, code: `C-${user.id.slice(0, 8)}` },
+          data: { userId: user.id, code: buildAlexithymicCode(user.id) },
         });
         clientCode = profile.code;
       }
@@ -69,8 +70,15 @@ export class AuthService {
       therapistCode = profile?.code ?? null;
     }
     if (user.role === Role.ALEXITHYMIC) {
-      const profile = await this.prisma.alexithymicProfile.findUnique({
+      const profile = await this.prisma.alexithymicProfile.upsert({
         where: { userId: user.id },
+        create: {
+          userId: user.id,
+          code: buildAlexithymicCode(user.id),
+        },
+        update: {
+          code: buildAlexithymicCode(user.id),
+        },
         select: { code: true },
       });
       clientCode = profile?.code ?? null;

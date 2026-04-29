@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, ForbiddenException, Get, Inject,
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiParam, ApiProperty, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { IsEnum, IsString } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { buildAlexithymicCode } from '../common/utils/profile-codes.js';
 
 enum TherapistClientStatusDto {
   ACTIVE = 'ACTIVE',
@@ -46,15 +47,10 @@ class TherapistClientsController {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
   private async ensureClientCode(userId: string) {
-    const profile = await this.prisma.alexithymicProfile.findUnique({
+    return this.prisma.alexithymicProfile.upsert({
       where: { userId },
-      select: { userId: true, code: true, nickname: true, user: { select: { email: true } } },
-    });
-    if (!profile) throw new NotFoundException('Client profile not found');
-    if (profile.code) return profile;
-    return this.prisma.alexithymicProfile.update({
-      where: { userId },
-      data: { code: `C-${userId.slice(0, 8)}` },
+      create: { userId, code: buildAlexithymicCode(userId) },
+      update: { code: buildAlexithymicCode(userId) },
       select: { userId: true, code: true, nickname: true, user: { select: { email: true } } },
     });
   }

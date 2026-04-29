@@ -32,7 +32,7 @@ enum Role {
 model AlexithymicProfile {
   userId            String            @id
   user              User              @relation(fields: [userId], references: [id])
-  code              String?           @unique
+  code              String            @unique
   nickname          String?
   birthDate         DateTime?
   therapyStartDate  DateTime?
