@@ -2,6 +2,7 @@ import { Module, Controller, Get, Patch, Delete, Req, Body, Inject } from '@nest
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEmail, IsOptional, IsString } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { buildAlexithymicCode } from '../common/utils/profile-codes.js';
 
 class UpdateMeDto {
   @ApiPropertyOptional({ type: String, format: 'email', example: 'new.email@example.com' })
@@ -43,7 +44,7 @@ class UsersController {
     if (body.nickname) {
       await this.prisma.alexithymicProfile.upsert({
         where: { userId: req.user.sub },
-        create: { userId: req.user.sub, nickname: body.nickname },
+        create: { userId: req.user.sub, code: buildAlexithymicCode(req.user.sub), nickname: body.nickname },
         update: { nickname: body.nickname },
       });
     }

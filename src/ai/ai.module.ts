@@ -242,7 +242,7 @@ class AIController {
     const systemWithDiary = [
       buildAIConsultSystemPrompt(),
       '',
-      'Контекст последних 3 записей дневника:',
+      'Контекст последних 5 записей дневника:',
       this.limitText(diaryContext, 3000),
     ].join('\n');
     return [
@@ -256,7 +256,7 @@ class AIController {
     const entries = await this.prisma.diaryEntry.findMany({
       where: { alexithymicId: userId, isDeleted: false },
       orderBy: { createdAt: 'desc' },
-      take: 3,
+      take: 5,
       select: {
         createdAt: true,
         situation: true,
@@ -288,6 +288,31 @@ class AIController {
       .join('\n\n');
   }
 
+  private parseSuggestedNextFromPayload(payload: any): string[] {
+    const content = payload?.choices?.[0]?.message?.content;
+    if (typeof content !== 'string') return [];
+    try {
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.suggested_next)) return [];
+      return parsed.suggested_next
+        .filter((item: unknown) => typeof item === 'string')
+        .map((item: string) => item.trim())
+        .filter((item: string) => item.length > 0)
+        .slice(0, 3)
+        .map((item: string) => (item.endsWith('?') ? item : `${item}?`));
+    } catch {
+      return [];
+    }
+  }
+
+  private buildFallbackSuggestedNext(): string[] {
+    return [
+      'Какая мысль в этой ситуации задела меня сильнее всего?',
+      'Что я почувствовал(а) в теле в тот момент?',
+      'Какой небольшой шаг поддержки я могу сделать для себя сегодня?',
+    ];
+  }
+
   @Post('consult')
   @ApiOperation({
     summary: 'AI консультация через GigaChat',
@@ -310,7 +335,8 @@ class AIController {
     const since = new Date(Date.now() - 60 * 60 * 1000);
     const cnt = await this.countRecentConsultations(req.user.sub, since);
     if (cnt >= 10) throw new HttpException('Limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
-    const sessionKey = this.buildSessionKey(req.user.sub, body.sessionId);
+    const sessionId = body.sessionId?.trim() || 'default';
+    const sessionKey = this.buildSessionKey(req.user.sub, sessionId);
     const sessionMessages = this.getSessionMessages(sessionKey);
     const diaryContext = await this.buildRecentDiaryContext(req.user.sub);
     const model = this.getNonEmptyConfig('GIGACHAT_MODEL', 'AI_MODEL_VERSION') ?? 'GigaChat';
@@ -372,6 +398,7 @@ class AIController {
 
     const text = JSON.stringify(response.data);
     const assistantText = this.extractAssistantText(response.data);
+    const suggestedNext = this.parseSuggestedNextFromPayload(response.data);
     this.pushSessionMessage(sessionKey, 'user', body.prompt);
     this.pushSessionMessage(sessionKey, 'assistant', assistantText);
     const saved = await this.createConsultationCompat({
@@ -381,7 +408,13 @@ class AIController {
       response: text,
       modelVersion: model,
     });
-    return { consultationId: saved.id, result: response.data };
+    return {
+      consultationId: saved.id,
+      sessionId,
+      result: response.data,
+      assistantReply: assistantText,
+      suggestedNextQuestions: suggestedNext.length ? suggestedNext : this.buildFallbackSuggestedNext(),
+    };
   }
 
   @Post('accept')
