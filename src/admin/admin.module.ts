@@ -3,7 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AdminModule } from '@adminjs/nestjs';
 import AdminJS from 'adminjs';
 import { Database, Resource } from '@adminjs/prisma';
-import { Prisma, Role } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaModule } from '../prisma/prisma.module.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import * as bcrypt from 'bcrypt';
@@ -80,7 +80,7 @@ const ADMIN_MODELS = [
           auth: {
             authenticate: async (email: string, password: string) => {
               const user = await prisma.user.findFirst({
-                where: { email, role: Role.ADMIN, isActive: true },
+                where: { email, role: 'ADMIN', isActive: true },
               });
               if (!user?.email) return null;
               const ok = await bcrypt.compare(password, user.passwordHash);

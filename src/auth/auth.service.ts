@@ -1,7 +1,7 @@
 import { Inject, Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { Prisma, Role } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ChangePasswordDto, LoginDto, RegisterDto } from './auth.dto.js';
 import { buildAlexithymicCode } from '../common/utils/profile-codes.js';
@@ -25,11 +25,11 @@ export class AuthService {
     try {
       const passwordHash = await bcrypt.hash(dto.password, 10);
       const user = await this.prisma.user.create({
-        data: { email, passwordHash, role: dto.role as Role },
+        data: { email, passwordHash, role: dto.role },
       });
       let clientCode: string | null = null;
       let fullName: string | null = null;
-      if (dto.role === Role.ALEXITHYMIC) {
+      if (dto.role === 'ALEXITHYMIC') {
         const profile = await this.prisma.alexithymicProfile.create({
           data: {
             userId: user.id,
@@ -42,7 +42,7 @@ export class AuthService {
         fullName = profile.nickname ?? null;
       }
       let therapistCode: string | null = null;
-      if (dto.role === Role.THERAPIST) {
+      if (dto.role === 'THERAPIST') {
         const profile = await this.prisma.therapistProfile.create({
           data: {
             userId: user.id,
@@ -76,14 +76,14 @@ export class AuthService {
     await this.prisma.auditLog.create({ data: { userId: user.id, eventType: 'AUTH_LOGIN' } });
     let therapistCode: string | null = null;
     let clientCode: string | null = null;
-    if (user.role === Role.THERAPIST) {
+    if (user.role === 'THERAPIST') {
       const profile = await this.prisma.therapistProfile.findUnique({
         where: { userId: user.id },
         select: { code: true },
       });
       therapistCode = profile?.code ?? null;
     }
-    if (user.role === Role.ALEXITHYMIC) {
+    if (user.role === 'ALEXITHYMIC') {
       const profile = await this.prisma.alexithymicProfile.upsert({
         where: { userId: user.id },
         create: {
