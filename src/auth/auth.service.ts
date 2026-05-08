@@ -17,6 +17,7 @@ export class AuthService {
 
   async register(dto: RegisterDto) {
     const email = dto.email.trim().toLowerCase();
+    const normalizedFullName = dto.fullName?.trim() || undefined;
 
     const byEmail = await this.prisma.user.findUnique({ where: { email } });
     if (byEmail) throw new BadRequestException('Email already in use');
@@ -27,23 +28,36 @@ export class AuthService {
         data: { email, passwordHash, role: dto.role as Role },
       });
       let clientCode: string | null = null;
+      let fullName: string | null = null;
       if (dto.role === Role.ALEXITHYMIC) {
         const profile = await this.prisma.alexithymicProfile.create({
-          data: { userId: user.id, code: buildAlexithymicCode(user.id) },
+          data: {
+            userId: user.id,
+            code: buildAlexithymicCode(user.id),
+            nickname: normalizedFullName,
+          },
+          select: { code: true, nickname: true },
         });
         clientCode = profile.code;
+        fullName = profile.nickname ?? null;
       }
       let therapistCode: string | null = null;
       if (dto.role === Role.THERAPIST) {
         const profile = await this.prisma.therapistProfile.create({
-          data: { userId: user.id, fullName: dto.fullName ?? 'Therapist', code: `T-${user.id.slice(0, 8)}` },
+          data: {
+            userId: user.id,
+            fullName: normalizedFullName ?? 'Therapist',
+            code: `T-${user.id.slice(0, 8)}`,
+          },
+          select: { code: true, fullName: true },
         });
         therapistCode = profile.code;
+        fullName = profile.fullName;
       }
       const tokens = await this.issueTokens(user.id, user.email ?? undefined, user.phone ?? undefined, user.role);
       await this.prisma.consent.create({ data: { userId: user.id, type: 'DATA_PROCESSING', version: '1.0.0' } });
       await this.prisma.auditLog.create({ data: { userId: user.id, eventType: 'AUTH_REGISTER', description: 'User registered' } });
-      return { id: user.id, email: user.email, role: user.role, therapistCode, clientCode, ...tokens };
+      return { id: user.id, email: user.email, role: user.role, fullName, therapistCode, clientCode, ...tokens };
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         throw new BadRequestException('Email already in use');
