@@ -313,6 +313,20 @@ class AIController {
     ];
   }
 
+  private getConsultLimitSettings(): { maxRequests: number; windowMinutes: number } {
+    const rawMaxRequests = this.config.get<string>('AI_CONSULT_LIMIT_PER_WINDOW') ?? this.config.get<string>('AI_CONSULT_LIMIT_PER_HOUR');
+    const rawWindowMinutes = this.config.get<string>('AI_CONSULT_LIMIT_WINDOW_MINUTES') ?? '60';
+
+    const parsedMaxRequests = parseInt(rawMaxRequests ?? '', 10);
+    const parsedWindowMinutes = parseInt(rawWindowMinutes, 10);
+
+    // Non-positive or invalid values disable backend-side quota.
+    const maxRequests = Number.isFinite(parsedMaxRequests) && parsedMaxRequests > 0 ? parsedMaxRequests : 0;
+    const windowMinutes = Number.isFinite(parsedWindowMinutes) && parsedWindowMinutes > 0 ? parsedWindowMinutes : 60;
+
+    return { maxRequests, windowMinutes };
+  }
+
   @Post('consult')
   @ApiOperation({
     summary: 'AI консультация через GigaChat',
@@ -332,9 +346,14 @@ class AIController {
       diaryEntryId = entry?.id ?? null;
     }
 
-    const since = new Date(Date.now() - 60 * 60 * 1000);
-    const cnt = await this.countRecentConsultations(req.user.sub, since);
-    if (cnt >= 10) throw new HttpException('Limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
+    const { maxRequests, windowMinutes } = this.getConsultLimitSettings();
+    if (maxRequests > 0) {
+      const since = new Date(Date.now() - windowMinutes * 60 * 1000);
+      const cnt = await this.countRecentConsultations(req.user.sub, since);
+      if (cnt >= maxRequests) {
+        throw new HttpException('Limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
+      }
+    }
     const sessionId = body.sessionId?.trim() || 'default';
     const sessionKey = this.buildSessionKey(req.user.sub, sessionId);
     const sessionMessages = this.getSessionMessages(sessionKey);
