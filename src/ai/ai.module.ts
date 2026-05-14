@@ -1,3 +1,5 @@
+// ai.module.ts
+import { DIARY_RATED_EMOTIONS_FOR_VALIDATION } from '../diary-entries/diary-rated-emotions.constants.js';
 import { Module, Controller, Post, Body, Req, HttpException, HttpStatus, InternalServerErrorException, Inject } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
@@ -7,7 +9,12 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import type { AxiosResponse } from 'axios';
 import { randomUUID } from 'crypto';
-import { buildAIConsultSystemPrompt } from './ai-consult-system-prompt.js';
+import {
+  AI_REPLY_SYSTEM_PROMPT,
+  AI_EMOTION_SYSTEM_PROMPT,
+  buildDiaryContextPrompt,
+  buildSessionContextPrompt,
+} from './ai-consult-system-prompt.js';
 
 type GigaChatTokenPayload = {
   access_token: string;
@@ -179,7 +186,6 @@ class AIController {
       });
     } catch (error) {
       if (!this.isUnknownUserIdArgError(error)) throw error;
-
       // Fallback for older Prisma clients/schemas where AIConsultation has no userId column.
       return this.prisma.aIConsultation.count({
         where: {
@@ -210,7 +216,6 @@ class AIController {
       });
     } catch (error) {
       if (!this.isUnknownUserIdArgError(error)) throw error;
-
       // Fallback for older Prisma clients/schemas where AIConsultation has no userId column.
       return this.prisma.aIConsultation.create({
         data: {
@@ -223,34 +228,152 @@ class AIController {
     }
   }
 
-  private buildChatMessages(
+  // ------------------- НОВЫЕ МЕТОДЫ ДЛЯ ДВУХСТАДИЙНОГО ВЫЗОВА -------------------
+
+  private buildReplyMessages(
     prompt: string,
     diaryContext: string,
     sessionMessages: Array<{ role: 'user' | 'assistant'; content: string }>,
-    compact = false,
   ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
-    if (compact) {
-      return [
-        { role: 'system', content: buildAIConsultSystemPrompt() },
-        { role: 'user', content: this.limitText(prompt, 2000) },
-      ];
-    }
-    const shortSession = sessionMessages.slice(-8).map((m) => ({
-      role: m.role,
-      content: this.limitText(m.content, 800),
-    }));
-    const systemWithDiary = [
-      buildAIConsultSystemPrompt(),
-      '',
-      'Контекст последних 5 записей дневника:',
-      this.limitText(diaryContext, 3000),
-    ].join('\n');
+    const systemContent = [
+      AI_REPLY_SYSTEM_PROMPT,
+      buildDiaryContextPrompt(diaryContext),
+      buildSessionContextPrompt(sessionMessages.slice(-8)),
+    ].join('\n\n');
+
     return [
-      { role: 'system', content: systemWithDiary },
-      ...shortSession,
+      { role: 'system', content: this.limitText(systemContent, 4000) },
       { role: 'user', content: this.limitText(prompt, 2000) },
     ];
   }
+
+  private buildEmotionMessages(prompt: string): Array<{ role: 'system' | 'user'; content: string }> {
+    return [
+      { role: 'system', content: AI_EMOTION_SYSTEM_PROMPT },
+      { role: 'user', content: this.limitText(prompt, 2000) },
+    ];
+  }
+
+ private async callGigaChatWithRetry(
+  messages: Array<{ role: string; content: string }>,
+  model: string,
+  accessToken: string,
+  temperature: number, // ДОБАВЛЕН ПАРАМЕТР
+): Promise<string> {
+  const chatUrls = this.getChatCompletionUrls();
+  let lastError: unknown;
+  const failed: string[] = [];
+
+  for (const chatUrl of chatUrls) {
+    try {
+      const response = await axios.post(
+        chatUrl,
+        { model, messages, temperature }, // ИСПОЛЬЗУЕМ ПЕРЕДАННЫЙ temperature
+        { headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` } },
+      );
+      const content = response.data?.choices?.[0]?.message?.content;
+      if (typeof content === 'string' && content.trim()) {
+        return content;
+      }
+      throw new Error('Empty or invalid response content');
+    } catch (e) {
+      lastError = e;
+      if (axios.isAxiosError(e)) {
+        failed.push(`${chatUrl} -> ${e.response?.status ?? 'NO_RESPONSE'}`);
+        if (e.response?.status !== 404) throw e;
+      } else {
+        throw e;
+      }
+    }
+  }
+  if (axios.isAxiosError(lastError) && lastError.response?.status === 404) {
+    throw new HttpException(
+      `GigaChat endpoint/model not found (model=${model}). Tried: ${failed.join(', ')}`,
+      HttpStatus.BAD_GATEWAY,
+    );
+  }
+  throw lastError;
+}
+
+// НОВЫЙ МЕТОД для вызова эмоций с retry и валидацией
+private async callEmotionWithRetry(
+  messages: Array<{ role: string; content: string }>,
+  model: string,
+  accessToken: string,
+): Promise<Array<{ name: string; probability: number }>> {
+  const MAX_RETRIES = 1; // Одна попытка повторения
+  let lastError: unknown;
+  
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Эмоции всегда с temperature = 0
+      const emotionResponse = await this.callGigaChatWithRetry(
+        messages, 
+        model, 
+        accessToken, 
+        0 // температура 0 для эмоций
+      );
+      
+      const emotions = this.parseEmotionsFromReply(emotionResponse);
+      
+      // Валидация: проверяем, что все эмоции из разрешенного списка
+      const validEmotions = this.validateEmotions(emotions);
+      
+      if (validEmotions.length === 5) {
+        // Все эмоции валидны
+        return validEmotions;
+      }
+      
+      // Если эмоций меньше 5 или есть невалидные, пробуем повторить
+      if (attempt < MAX_RETRIES) {
+        console.warn(`Invalid emotions detected (got ${validEmotions.length}/5), retrying...`);
+        continue; // Повторяем запрос
+      }
+      
+      // Если это последняя попытка, возвращаем то, что есть
+      return validEmotions;
+      
+    } catch (error) {
+      lastError = error;
+      if (attempt < MAX_RETRIES) {
+        console.warn(`Emotion call failed (attempt ${attempt + 1}), retrying...`, error);
+        continue;
+      }
+      throw error;
+    }
+  }
+  
+  throw lastError;
+}
+
+
+  private parseEmotionsFromReply(replyContent: string): Array<{ name: string; probability: number }> {
+    try {
+      // Ищем JSON-блок в ответе (на случай, если модель добавила лишний текст)
+      const jsonMatch = replyContent.match(/\{[\s\S]*"emotions"[\s\S]*\}/);
+      if (!jsonMatch) return [];
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!Array.isArray(parsed?.emotions)) return [];
+      return parsed.emotions
+        .filter((e: any) => typeof e.name === 'string' && typeof e.probability === 'number')
+        .slice(0, 5);
+    } catch {
+      return [];
+    }
+  }
+
+// НОВЫЙ МЕТОД для валидации эмоций из разрешенного списка
+private validateEmotions(
+  emotions: Array<{ name: string; probability: number }>
+): Array<{ name: string; probability: number }> {
+
+  return emotions.filter(emotion => 
+    DIARY_RATED_EMOTIONS_FOR_VALIDATION.includes(emotion.name) &&
+    typeof emotion.probability === 'number' &&
+    emotion.probability >= 0 &&
+    emotion.probability <= 1
+  ).slice(0, 5);
+}
 
   private async buildRecentDiaryContext(userId: string): Promise<string> {
     const entries = await this.prisma.diaryEntry.findMany({
@@ -288,31 +411,6 @@ class AIController {
       .join('\n\n');
   }
 
-  private parseSuggestedNextFromPayload(payload: any): string[] {
-    const content = payload?.choices?.[0]?.message?.content;
-    if (typeof content !== 'string') return [];
-    try {
-      const parsed = JSON.parse(content);
-      if (!Array.isArray(parsed?.suggested_next)) return [];
-      return parsed.suggested_next
-        .filter((item: unknown) => typeof item === 'string')
-        .map((item: string) => item.trim())
-        .filter((item: string) => item.length > 0)
-        .slice(0, 3)
-        .map((item: string) => (item.endsWith('?') ? item : `${item}?`));
-    } catch {
-      return [];
-    }
-  }
-
-  private buildFallbackSuggestedNext(): string[] {
-    return [
-      'Какая мысль в этой ситуации задела меня сильнее всего?',
-      'Что я почувствовал(а) в теле в тот момент?',
-      'Какой небольшой шаг поддержки я могу сделать для себя сегодня?',
-    ];
-  }
-
   private getConsultLimitSettings(): { maxRequests: number; windowMinutes: number } {
     const rawMaxRequests = this.config.get<string>('AI_CONSULT_LIMIT_PER_WINDOW') ?? this.config.get<string>('AI_CONSULT_LIMIT_PER_HOUR');
     const rawWindowMinutes = this.config.get<string>('AI_CONSULT_LIMIT_WINDOW_MINUTES') ?? '60';
@@ -320,131 +418,191 @@ class AIController {
     const parsedMaxRequests = parseInt(rawMaxRequests ?? '', 10);
     const parsedWindowMinutes = parseInt(rawWindowMinutes, 10);
 
-    // Non-positive or invalid values disable backend-side quota.
     const maxRequests = Number.isFinite(parsedMaxRequests) && parsedMaxRequests > 0 ? parsedMaxRequests : 0;
     const windowMinutes = Number.isFinite(parsedWindowMinutes) && parsedWindowMinutes > 0 ? parsedWindowMinutes : 60;
 
     return { maxRequests, windowMinutes };
   }
 
-  @Post('consult')
-  @ApiOperation({
-    summary: 'AI консультация через GigaChat',
-    description:
-      'Модель получает системный промпт рефлексии (без диагноза, JSON: reply, emotions×5 из каталога GET /emotions, suggested_next). ' +
-        'Поле diaryEntryId необязательно; лимит запросов считается по пользователю.',
-  })
-  @ApiBody({ type: AIConsultDto })
-  async consult(@Req() req: any, @Body() body: AIConsultDto) {
-    const rawDiaryEntryId = typeof body.diaryEntryId === 'string' ? body.diaryEntryId.trim() : '';
-    let diaryEntryId: string | null = null;
-    if (rawDiaryEntryId) {
-      const entry = await this.prisma.diaryEntry.findFirst({
-        where: { id: rawDiaryEntryId, alexithymicId: req.user.sub, isDeleted: false },
-        select: { id: true },
-      });
-      diaryEntryId = entry?.id ?? null;
-    }
+  // ------------------- ОСНОВНОЙ ЭНДПОИНТ CONSULT (ДВУХСТАДИЙНЫЙ) -------------------
 
-    const { maxRequests, windowMinutes } = this.getConsultLimitSettings();
-    if (maxRequests > 0) {
-      const since = new Date(Date.now() - windowMinutes * 60 * 1000);
-      const cnt = await this.countRecentConsultations(req.user.sub, since);
-      if (cnt >= maxRequests) {
-        throw new HttpException('Limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
-      }
-    }
-    const sessionId = body.sessionId?.trim() || 'default';
-    const sessionKey = this.buildSessionKey(req.user.sub, sessionId);
-    const sessionMessages = this.getSessionMessages(sessionKey);
-    const diaryContext = await this.buildRecentDiaryContext(req.user.sub);
-    const model = this.getNonEmptyConfig('GIGACHAT_MODEL', 'AI_MODEL_VERSION') ?? 'GigaChat';
-    const accessToken = await this.getGigaChatAccessToken();
-    let response: AxiosResponse<any> | null = null;
-    let lastError: unknown;
-    const failed: string[] = [];
-    const chatUrls = this.getChatCompletionUrls();
-    for (const chatUrl of chatUrls) {
-      const messageVariants = [
-        this.buildChatMessages(body.prompt, diaryContext, sessionMessages, false),
-        this.buildChatMessages(body.prompt, diaryContext, sessionMessages, true),
-      ];
-      try {
-        for (let i = 0; i < messageVariants.length; i++) {
-          try {
-            response = await axios.post(chatUrl, {
-              model,
-              messages: messageVariants[i],
-              temperature: 0.7,
-            }, {
-              headers: {
-                Accept: 'application/json',
-                Authorization: `Bearer ${accessToken}`,
-              },
-            });
-            break;
-          } catch (inner) {
-            if (!axios.isAxiosError(inner)) throw inner;
-            const status = inner.response?.status ?? 'NO_RESPONSE';
-            failed.push(`${chatUrl}[variant:${i}] -> ${status}`);
-            if (inner.response?.status === 422 && i === 0) {
-              continue;
-            }
-            if (inner.response?.status === 404) {
-              throw inner;
-            }
-            throw inner;
-          }
-        }
-        if (!response) throw new HttpException('No response from chat variants', HttpStatus.BAD_GATEWAY);
-        break;
-      } catch (e) {
-        lastError = e;
-        if (!axios.isAxiosError(e)) throw e;
-        failed.push(`${chatUrl} -> ${e.response?.status ?? 'NO_RESPONSE'}`);
-        if (e.response?.status !== 404) throw e;
-      }
-    }
-    if (!response) {
-      if (axios.isAxiosError(lastError) && lastError.response?.status === 404) {
-        throw new HttpException(
-          `GigaChat endpoint/model not found (model=${model}). Tried: ${failed.join(', ')}`,
-          HttpStatus.BAD_GATEWAY,
-        );
-      }
-      throw lastError;
-    }
+  
 
-    const text = JSON.stringify(response.data);
-    const assistantText = this.extractAssistantText(response.data);
-    const suggestedNext = this.parseSuggestedNextFromPayload(response.data);
-    this.pushSessionMessage(sessionKey, 'user', body.prompt);
-    this.pushSessionMessage(sessionKey, 'assistant', assistantText);
-    const saved = await this.createConsultationCompat({
-      userId: req.user.sub,
-      diaryEntryId,
-      prompt: body.prompt,
-      response: text,
-      modelVersion: model,
+// ОБНОВЛЕННЫЙ ОСНОВНОЙ МЕТОД consult
+// ОБНОВЛЕННЫЙ ОСНОВНОЙ МЕТОД consult
+@Post('consult')
+@ApiOperation({
+  summary: 'AI консультация через GigaChat (двухстадийная: reply + эмоции)',
+  description:
+    'Сначала генерируется рефлексивный ответ (обычный текст). Затем на основе того же текста определяются 5 эмоций с вероятностями. ' +
+    'Поле diaryEntryId необязательно; лимит запросов считается по пользователю.',
+})
+@ApiBody({ type: AIConsultDto })
+async consult(@Req() req: any, @Body() body: AIConsultDto) {
+  // Проверка привязки к дневнику
+  const rawDiaryEntryId = typeof body.diaryEntryId === 'string' ? body.diaryEntryId.trim() : '';
+  let diaryEntryId: string | null = null;
+  if (rawDiaryEntryId) {
+    const entry = await this.prisma.diaryEntry.findFirst({
+      where: { id: rawDiaryEntryId, alexithymicId: req.user.sub, isDeleted: false },
+      select: { id: true },
     });
-    return {
-      consultationId: saved.id,
-      sessionId,
-      result: response.data,
-      assistantReply: assistantText,
-      suggestedNextQuestions: suggestedNext.length ? suggestedNext : this.buildFallbackSuggestedNext(),
-    };
+    diaryEntryId = entry?.id ?? null;
   }
 
+  // Лимиты
+  const { maxRequests, windowMinutes } = this.getConsultLimitSettings();
+  if (maxRequests > 0) {
+    const since = new Date(Date.now() - windowMinutes * 60 * 1000);
+    const cnt = await this.countRecentConsultations(req.user.sub, since);
+    if (cnt >= maxRequests) {
+      throw new HttpException('Limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
+    }
+  }
+
+  const sessionId = body.sessionId?.trim() || 'default';
+  const sessionKey = this.buildSessionKey(req.user.sub, sessionId);
+  const sessionMessages = this.getSessionMessages(sessionKey);
+  const diaryContext = await this.buildRecentDiaryContext(req.user.sub);
+  const model = this.getNonEmptyConfig('GIGACHAT_MODEL', 'AI_MODEL_VERSION') ?? 'GigaChat';
+  const accessToken = await this.getGigaChatAccessToken();
+
+  // ----- ЭТАП 1: Генерация reply (текст) с temperature = 0.7 -----
+  const replyMessages = this.buildReplyMessages(body.prompt, diaryContext, sessionMessages);
+  let assistantReply: string;
+  let fullGigaChatResponse: any = null;
+  
+  try {
+    // Вызываем GigaChat и сохраняем полный ответ
+    const chatUrls = this.getChatCompletionUrls();
+    let lastError: unknown;
+    
+    for (const chatUrl of chatUrls) {
+      try {
+        const response = await axios.post(
+          chatUrl,
+          { 
+            model, 
+            messages: replyMessages, 
+            temperature: 0.7 
+          },
+          { 
+            headers: { 
+              Accept: 'application/json', 
+              Authorization: `Bearer ${accessToken}` 
+            } 
+          },
+        );
+        
+        fullGigaChatResponse = response.data;
+        assistantReply = response.data?.choices?.[0]?.message?.content;
+        
+        if (typeof assistantReply === 'string' && assistantReply.trim()) {
+          break;
+        }
+        throw new Error('Empty or invalid response content');
+      } catch (e) {
+        lastError = e;
+        if (axios.isAxiosError(e) && e.response?.status !== 404) throw e;
+      }
+    }
+    
+    if (!assistantReply) throw lastError;
+    
+  } catch (error) {
+    console.error('Reply generation failed:', error);
+    throw new HttpException('Failed to generate AI reply', HttpStatus.INTERNAL_SERVER_ERROR);
+  }
+
+  // Парсим JSON из ответа ассистента (если он вернул JSON с полями reply, emotions, suggested_next)
+  let parsedReply: any = null;
+  let replyText = assistantReply;
+  let emotions: Array<{ name: string; probability: number }> = [];
+  let suggestedNext: string[] = [];
+  
+  try {
+    // Пытаемся извлечь JSON из ответа
+    const jsonMatch = assistantReply.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      parsedReply = JSON.parse(jsonMatch[0]);
+      if (parsedReply.reply) {
+        replyText = parsedReply.reply;
+      }
+      if (Array.isArray(parsedReply.emotions)) {
+        emotions = parsedReply.emotions;
+      }
+      if (Array.isArray(parsedReply.suggested_next)) {
+        suggestedNext = parsedReply.suggested_next;
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to parse assistant reply as JSON, using as plain text');
+  }
+
+  // Если эмоции не были получены из первого ответа, делаем второй запрос
+  if (emotions.length === 0) {
+    try {
+      const emotionMessages = this.buildEmotionMessages(body.prompt);
+      emotions = await this.callEmotionWithRetry(emotionMessages, model, accessToken);
+    } catch (error) {
+      console.error('Emotion classification failed after retries:', error);
+    }
+  }
+
+  // Сохраняем историю диалога (используем replyText для истории)
+  this.pushSessionMessage(sessionKey, 'user', body.prompt);
+  this.pushSessionMessage(sessionKey, 'assistant', replyText);
+
+  // Формируем ответ для сохранения в БД
+  const fullResponsePayload = {
+    reply: replyText,
+    emotions,
+    suggested_next: suggestedNext
+  };
+  
+  const saved = await this.createConsultationCompat({
+    userId: req.user.sub,
+    diaryEntryId,
+    prompt: body.prompt,
+    response: JSON.stringify(fullResponsePayload),
+    modelVersion: model,
+  });
+
+  // Возвращаем ответ в нужном формате
+  return {
+    consultationId: saved.id,
+    sessionId,
+    result: JSON.stringify(fullResponsePayload, null), //fullGigaChatResponse,
+    assistantReply: JSON.stringify(fullResponsePayload, null) // ← готовый объект
+  };
+}
   @Post('accept')
   @ApiOperation({ summary: 'Принять эмоцию из AI' })
   @ApiBody({ type: AIAcceptDto })
-  accept(@Body() body: AIAcceptDto) { return this.prisma.diaryEntryEmotion.create({ data: { diaryEntryId: body.diaryEntryId, emotionId: body.emotionId, confidence: body.confidence, source: 'AI' } }); }
+  accept(@Body() body: AIAcceptDto) {
+    return this.prisma.diaryEntryEmotion.create({
+      data: {
+        diaryEntryId: body.diaryEntryId,
+        emotionId: body.emotionId,
+        confidence: body.confidence,
+        source: 'AI',
+      },
+    });
+  }
 
   @Post('reject')
   @ApiOperation({ summary: 'Отклонить AI консультацию' })
   @ApiBody({ type: AIRejectDto })
-  reject(@Req() req: any, @Body() body: AIRejectDto) { return this.prisma.auditLog.create({ data: { userId: req.user.sub, eventType: 'AI_REJECTED', description: `consultationId=${body.consultationId}` } }); }
+  reject(@Req() req: any, @Body() body: AIRejectDto) {
+    return this.prisma.auditLog.create({
+      data: {
+        userId: req.user.sub,
+        eventType: 'AI_REJECTED',
+        description: `consultationId=${body.consultationId}`,
+      },
+    });
+  }
 }
+
 @Module({ controllers: [AIController] })
 export class AIModule {}
