@@ -244,7 +244,7 @@ class TherapistClientsController {
         visibility: true,
         emotion: true,
         emotions: {
-          include: {
+          select: {
             emotion: { select: { id: true, name: true } },
           },
         },
