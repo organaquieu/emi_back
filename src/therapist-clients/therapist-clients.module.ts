@@ -198,11 +198,13 @@ class TherapistClientsController {
   }
 
   @Patch('therapist-client')
-  @ApiOperation({ summary: 'Изменить статус связки (ACTIVE/FINISHED)' })
+  @ApiOperation({ summary: 'Изменить статус связки (ACTIVE/FINISHED); доступно терапевту и клиенту по этой связке' })
   @ApiBody({ type: UpdateTherapistClientStatusDto })
   async status(@Req() req: any, @Body() body: UpdateTherapistClientStatusDto) {
     const link = await this.prisma.therapistClient.findUnique({ where: { id: body.id } });
-    if (!link || link.therapistId !== req.user.sub) throw new ForbiddenException();
+    const isTherapist = link?.therapistId === req.user.sub;
+    const isClient = link?.alexithymicId === req.user.sub;
+    if (!link || (!isTherapist && !isClient)) throw new ForbiddenException();
     return this.prisma.therapistClient.update({
       where: { id: body.id },
       data: {
