@@ -469,7 +469,7 @@ async consult(@Req() req: any, @Body() body: AIConsultDto) {
 
   // ----- ЭТАП 1: Генерация reply (текст) с temperature = 0.7 -----
   const replyMessages = this.buildReplyMessages(body.prompt, diaryContext, sessionMessages);
-  let assistantReply: string;
+  let assistantReply: string | undefined;
   let fullGigaChatResponse: any = null;
   
   try {
@@ -507,7 +507,7 @@ async consult(@Req() req: any, @Body() body: AIConsultDto) {
       }
     }
     
-    if (!assistantReply) throw lastError;
+    if (!assistantReply?.trim()) throw lastError;
     
   } catch (error) {
     console.error('Reply generation failed:', error);
@@ -568,12 +568,11 @@ async consult(@Req() req: any, @Body() body: AIConsultDto) {
     modelVersion: model,
   });
 
-  // Возвращаем ответ в нужном формате
+  // Возвращаем ответ в нужном формате (одно поле result — без дублирования assistantReply)
   return {
     consultationId: saved.id,
     sessionId,
-    result: JSON.stringify(fullResponsePayload, null), //fullGigaChatResponse,
-    assistantReply: JSON.stringify(fullResponsePayload, null) // ← готовый объект
+    result: JSON.stringify(fullResponsePayload),
   };
 }
   @Post('accept')

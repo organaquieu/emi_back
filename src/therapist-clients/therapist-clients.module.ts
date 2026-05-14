@@ -220,6 +220,37 @@ class TherapistClientsController {
     if (!link || link.therapistId !== req.user.sub || link.status !== 'ACTIVE') throw new ForbiddenException();
     return this.prisma.diaryEntry.findMany({ where: { alexithymicId: link.alexithymicId, visibility: 'THERAPIST', isDeleted: false } });
   }
+
+  @Get('therapist-clients/:id/emotion-statistics')
+  @ApiOperation({
+    summary: 'Статистика эмоций по всем записям дневника клиента',
+    description:
+      'По активной связке возвращаются **все** не удалённые записи дневника клиента: даты, видимость (PRIVATE/THERAPIST), краткое поле **emotion** и массив **emotions** (picks из справочника). ' +
+      'Текст записи (ситуация, мысль, реакция, поведение, теги) **не отдаётся** — чтобы терапевт мог строить статистику по эмоциям и при приватных записях не видел их содержание. ' +
+      'Полный текст доступен только для записей с visibility=THERAPIST через GET /therapist-clients/:id/report или GET /diary/:entryId.',
+  })
+  @ApiParam({ name: 'id', type: String, description: 'ID связки therapistClient' })
+  async emotionStatistics(@Req() req: any, @Param('id') id: string) {
+    if (req.user.role !== 'THERAPIST') throw new ForbiddenException('Only therapist can view client emotion statistics');
+    const link = await this.prisma.therapistClient.findUnique({ where: { id } });
+    if (!link || link.therapistId !== req.user.sub || link.status !== 'ACTIVE') throw new ForbiddenException();
+    return this.prisma.diaryEntry.findMany({
+      where: { alexithymicId: link.alexithymicId, isDeleted: false },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        date: true,
+        createdAt: true,
+        visibility: true,
+        emotion: true,
+        emotions: {
+          include: {
+            emotion: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+  }
 }
 @Module({ controllers: [TherapistClientsController] })
 export class TherapistClientsModule {}

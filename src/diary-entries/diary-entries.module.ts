@@ -289,13 +289,49 @@ class DiaryEntriesController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get diary entry by id' })
+  @ApiOperation({
+    summary: 'Get diary entry by id',
+    description:
+      'Клиент — своя запись целиком. Терапевт — только при активной связи с автором записи: для PRIVATE возвращаются даты, видимость и эмоции (без текста полей дневника); для THERAPIST — полная запись.',
+  })
   async one(@Req() req: any, @Param('id') id: string) {
     const entry = await this.prisma.diaryEntry.findUnique({
       where: { id },
       include: DIARY_ENTRY_DETAIL_INCLUDE,
     });
-    if (req.user.role === 'THERAPIST' && entry?.visibility === 'PRIVATE') throw new ForbiddenException();
+    if (!entry || entry.isDeleted) throw new NotFoundException('Diary entry not found');
+
+    if (req.user.role === 'THERAPIST') {
+      const link = await this.prisma.therapistClient.findFirst({
+        where: { therapistId: req.user.sub, alexithymicId: entry.alexithymicId, status: 'ACTIVE' },
+      });
+      if (!link) throw new ForbiddenException();
+      if (entry.visibility === 'PRIVATE') {
+        return {
+          id: entry.id,
+          alexithymicId: entry.alexithymicId,
+          date: entry.date,
+          createdAt: entry.createdAt,
+          updatedAt: entry.updatedAt,
+          visibility: entry.visibility,
+          isDeleted: entry.isDeleted,
+          emotion: entry.emotion,
+          emotions: entry.emotions,
+          situation: null,
+          thought: null,
+          reaction: null,
+          behavior: null,
+          behaviorAlt: null,
+          tags: null,
+        };
+      }
+      return entry;
+    }
+
+    if (req.user.role === 'ALEXITHYMIC' && entry.alexithymicId !== req.user.sub) {
+      throw new ForbiddenException();
+    }
+
     return entry;
   }
 
