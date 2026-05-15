@@ -1,0 +1,15 @@
+# Production: без монтирования исходников (dist берётся из образа)
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: emihome-app
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

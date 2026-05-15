@@ -1,34 +1,39 @@
-# Dockerfile
-FROM node:20-alpine
+# Build stage
+FROM node:20-alpine AS builder
 
-# Create app directory
 WORKDIR /app
 
-# Create a non-root user with write permissions to /app
+COPY package*.json ./
+COPY prisma ./prisma/
+
+RUN npm ci --legacy-peer-deps
+
+COPY . .
+
+RUN npx prisma generate
+RUN npm run build
+
+# Production stage
+FROM node:20-alpine
+
+WORKDIR /app
+
 RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nestjs -u 1001 -G nodejs
+    adduser -S nestjs -u 1001 -G nodejs && \
+    chown -R nestjs:nodejs /app
 
-# Set ownership of /app to nestjs user
-RUN chown -R nestjs:nodejs /app
-
-# Switch to non-root user
-USER nestjs
-
-# Copy package files
 COPY --chown=nestjs:nodejs package*.json ./
 COPY --chown=nestjs:nodejs prisma ./prisma/
 
-# Install dependencies
-RUN npm ci --legacy-peer-deps
+RUN npm ci --legacy-peer-deps --omit=dev && npx prisma generate
 
-# Generate Prisma client
-RUN npx prisma generate
+COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/.adminjs ./.adminjs
 
-# Copy source code
-COPY --chown=nestjs:nodejs . .
+USER nestjs
 
-# Expose port
 EXPOSE 3000
 
-# Run the app
+ENV NODE_ENV=production
+
 CMD ["npm", "run", "start:prod"]
