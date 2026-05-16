@@ -43,6 +43,16 @@ class UpdateTherapistClientStatusDto {
   status!: TherapistClientStatusDto;
 }
 
+class UpdateTherapistProfileDto {
+  @ApiProperty({
+    type: String,
+    description: 'О себе (поле TherapistProfile.description)',
+    example: 'Работаю с тревогой и эмоциональной регуляцией.',
+  })
+  @IsString()
+  description!: string;
+}
+
 @ApiTags('therapist-clients')
 @ApiBearerAuth()
 @Controller()
@@ -98,6 +108,24 @@ class TherapistClientsController {
     });
     if (!profile) throw new NotFoundException('Therapist profile not found');
     return profile;
+  }
+
+  @Patch('therapists/me/profile')
+  @ApiOperation({ summary: 'Обновить профиль терапевта (описание о себе)' })
+  @ApiBody({ type: () => UpdateTherapistProfileDto })
+  async updateMyProfile(@Req() req: any, @Body() body: UpdateTherapistProfileDto) {
+    if (req.user.role !== 'THERAPIST') {
+      throw new ForbiddenException('Only therapist can update therapist profile');
+    }
+    const profile = await this.prisma.therapistProfile.findUnique({
+      where: { userId: req.user.sub },
+    });
+    if (!profile) throw new NotFoundException('Therapist profile not found');
+    return this.prisma.therapistProfile.update({
+      where: { userId: req.user.sub },
+      data: { description: body.description.trim() || null },
+      select: { fullName: true, description: true, code: true, userId: true },
+    });
   }
 
   @Get('therapists/search')
