@@ -11,6 +11,7 @@ import { TherapistClientsModule } from './therapist-clients/therapist-clients.mo
 import { ReflectionModule } from './reflection/reflection.module.js';
 import { TasModule } from './tas/tas.module.js';
 import { AdminPanelModule } from './admin/admin.module.js';
+import { AppController } from './app.controller.js';
 
 @Module({
   imports: [
@@ -27,5 +28,6 @@ import { AdminPanelModule } from './admin/admin.module.js';
     ReflectionModule,
     TasModule,
   ],
+  controllers: [AppController],
 })
 export class AppModule {}
