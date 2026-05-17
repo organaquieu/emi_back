@@ -1,11 +1,23 @@
-import { Inject, Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
+import { randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { ChangePasswordDto, LoginDto, RegisterDto } from './auth.dto.js';
+import { MailService } from '../mail/mail.service.js';
+import { ChangePasswordDto, LoginDto, RegisterDto, SendRegistrationCodeDto } from './auth.dto.js';
 import { buildAlexithymicCode } from '../common/utils/profile-codes.js';
 import * as bcrypt from 'bcrypt';
+
+const VERIFICATION_TTL_MS = 15 * 60 * 1000;
+const RESEND_COOLDOWN_MS = 60 * 1000;
 
 @Injectable()
 export class AuthService {
@@ -13,7 +25,59 @@ export class AuthService {
     @Inject(PrismaService) private prisma: PrismaService,
     @Inject(JwtService) private jwt: JwtService,
     @Inject(ConfigService) private config: ConfigService,
+    @Inject(MailService) private mail: MailService,
   ) {}
+
+  async sendRegistrationCode(dto: SendRegistrationCodeDto) {
+    const email = dto.email.trim().toLowerCase();
+
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) throw new BadRequestException('Email already in use');
+
+    const latest = await this.prisma.emailVerificationCode.findFirst({
+      where: { email },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (latest && Date.now() - latest.createdAt.getTime() < RESEND_COOLDOWN_MS) {
+      throw new HttpException('Please wait before requesting a new code', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    const code = String(randomInt(100_000, 1_000_000));
+    const codeHash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + VERIFICATION_TTL_MS);
+
+    await this.prisma.$transaction([
+      this.prisma.emailVerificationCode.deleteMany({ where: { email } }),
+      this.prisma.emailVerificationCode.create({
+        data: { email, codeHash, expiresAt },
+      }),
+    ]);
+
+    await this.mail.sendRegistrationCode(email, code);
+
+    return {
+      success: true,
+      expiresInSeconds: Math.floor(VERIFICATION_TTL_MS / 1000),
+    };
+  }
+
+  private async assertEmailVerified(email: string, code: string) {
+    const record = await this.prisma.emailVerificationCode.findFirst({
+      where: { email, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!record) {
+      throw new BadRequestException('Verification code expired or not found. Request a new code.');
+    }
+
+    const valid = await bcrypt.compare(code, record.codeHash);
+    if (!valid) {
+      throw new BadRequestException('Invalid verification code');
+    }
+
+    await this.prisma.emailVerificationCode.deleteMany({ where: { email } });
+  }
 
   async register(dto: RegisterDto) {
     const email = dto.email.trim().toLowerCase();
@@ -21,6 +85,8 @@ export class AuthService {
 
     const byEmail = await this.prisma.user.findUnique({ where: { email } });
     if (byEmail) throw new BadRequestException('Email already in use');
+
+    await this.assertEmailVerified(email, dto.code);
 
     try {
       const passwordHash = await bcrypt.hash(dto.password, 10);

@@ -23,6 +23,17 @@ model User {
   aiConsultations    AIConsultation[]
 }
 
+/** Одноразовый код подтверждения email при регистрации. */
+model EmailVerificationCode {
+  id        String   @id @default(uuid())
+  email     String
+  codeHash  String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email, expiresAt])
+}
+
 enum Role {
   ALEXITHYMIC
   THERAPIST

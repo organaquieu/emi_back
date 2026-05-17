@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 
 
 export enum RegisterRole {
@@ -8,10 +8,25 @@ export enum RegisterRole {
   ADMIN = 'ADMIN',
 }
 
+export class SendRegistrationCodeDto {
+  @ApiProperty({ type: String, format: 'email', example: 'user@example.com' })
+  @IsEmail()
+  email!: string;
+}
+
 export class RegisterDto {
   @ApiProperty({ type: String, format: 'email', example: 'user@example.com' })
   @IsEmail()
   email!: string;
+
+  @ApiProperty({
+    type: String,
+    description: '6-значный код из письма (сначала POST /auth/register/send-code)',
+    example: '482913',
+  })
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'code must be exactly 6 digits' })
+  code!: string;
 
   @ApiProperty({ type: String, minLength: 8, example: 'SecurePass1!' })
   @MinLength(8)
