@@ -23,15 +23,21 @@ model User {
   aiConsultations    AIConsultation[]
 }
 
-/** Одноразовый код подтверждения email при регистрации. */
+/** Одноразовый код на email (регистрация или сброс пароля). */
 model EmailVerificationCode {
-  id        String   @id @default(uuid())
+  id        String                   @id @default(uuid())
   email     String
+  purpose   EmailVerificationPurpose @default(REGISTRATION)
   codeHash  String
   expiresAt DateTime
-  createdAt DateTime @default(now())
+  createdAt DateTime                 @default(now())
 
-  @@index([email, expiresAt])
+  @@index([email, purpose, expiresAt])
+}
+
+enum EmailVerificationPurpose {
+  REGISTRATION
+  PASSWORD_RESET
 }
 
 enum Role {

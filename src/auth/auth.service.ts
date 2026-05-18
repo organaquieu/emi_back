@@ -8,11 +8,18 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { Prisma } from '@prisma/client';
+import { EmailVerificationPurpose, Prisma } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MailService } from '../mail/mail.service.js';
-import { ChangePasswordDto, LoginDto, RegisterDto, SendRegistrationCodeDto } from './auth.dto.js';
+import {
+  ChangePasswordDto,
+  LoginDto,
+  RegisterDto,
+  ResetPasswordDto,
+  SendForgotPasswordCodeDto,
+  SendRegistrationCodeDto,
+} from './auth.dto.js';
 import { buildAlexithymicCode } from '../common/utils/profile-codes.js';
 import * as bcrypt from 'bcrypt';
 
@@ -34,8 +41,66 @@ export class AuthService {
     const existing = await this.prisma.user.findUnique({ where: { email } });
     if (existing) throw new BadRequestException('Email already in use');
 
+    await this.issueVerificationCode(email, EmailVerificationPurpose.REGISTRATION, (to, code) =>
+      this.mail.sendRegistrationCode(to, code),
+    );
+
+    return {
+      success: true,
+      expiresInSeconds: Math.floor(VERIFICATION_TTL_MS / 1000),
+    };
+  }
+
+  async sendForgotPasswordCode(dto: SendForgotPasswordCodeDto) {
+    const email = dto.email.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+
+    if (!user) {
+      throw new BadRequestException('User with this email was not found');
+    }
+    if (!user.isActive) {
+      throw new BadRequestException('Account is disabled');
+    }
+
+    await this.issueVerificationCode(email, EmailVerificationPurpose.PASSWORD_RESET, (to, code) =>
+      this.mail.sendPasswordResetCode(to, code),
+    );
+
+    return {
+      success: true,
+      expiresInSeconds: Math.floor(VERIFICATION_TTL_MS / 1000),
+    };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    if (dto.newPassword !== dto.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+
+    const email = dto.email.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user || !user.isActive) {
+      throw new BadRequestException('Invalid or expired verification code');
+    }
+
+    await this.assertVerificationCode(email, dto.code, EmailVerificationPurpose.PASSWORD_RESET);
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+    await this.prisma.auditLog.create({
+      data: { userId: user.id, eventType: 'AUTH_PASSWORD_RESET', description: 'Password reset via email code' },
+    });
+
+    return { success: true };
+  }
+
+  private async issueVerificationCode(
+    email: string,
+    purpose: EmailVerificationPurpose,
+    sendMail: (to: string, code: string) => Promise<void>,
+  ) {
     const latest = await this.prisma.emailVerificationCode.findFirst({
-      where: { email },
+      where: { email, purpose },
       orderBy: { createdAt: 'desc' },
     });
     if (latest && Date.now() - latest.createdAt.getTime() < RESEND_COOLDOWN_MS) {
@@ -47,23 +112,18 @@ export class AuthService {
     const expiresAt = new Date(Date.now() + VERIFICATION_TTL_MS);
 
     await this.prisma.$transaction([
-      this.prisma.emailVerificationCode.deleteMany({ where: { email } }),
+      this.prisma.emailVerificationCode.deleteMany({ where: { email, purpose } }),
       this.prisma.emailVerificationCode.create({
-        data: { email, codeHash, expiresAt },
+        data: { email, purpose, codeHash, expiresAt },
       }),
     ]);
 
-    await this.mail.sendRegistrationCode(email, code);
-
-    return {
-      success: true,
-      expiresInSeconds: Math.floor(VERIFICATION_TTL_MS / 1000),
-    };
+    await sendMail(email, code);
   }
 
-  private async assertEmailVerified(email: string, code: string) {
+  private async assertVerificationCode(email: string, code: string, purpose: EmailVerificationPurpose) {
     const record = await this.prisma.emailVerificationCode.findFirst({
-      where: { email, expiresAt: { gt: new Date() } },
+      where: { email, purpose, expiresAt: { gt: new Date() } },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -76,7 +136,7 @@ export class AuthService {
       throw new BadRequestException('Invalid verification code');
     }
 
-    await this.prisma.emailVerificationCode.deleteMany({ where: { email } });
+    await this.prisma.emailVerificationCode.deleteMany({ where: { email, purpose } });
   }
 
   async register(dto: RegisterDto) {
@@ -86,7 +146,7 @@ export class AuthService {
     const byEmail = await this.prisma.user.findUnique({ where: { email } });
     if (byEmail) throw new BadRequestException('Email already in use');
 
-    await this.assertEmailVerified(email, dto.code);
+    await this.assertVerificationCode(email, dto.code, EmailVerificationPurpose.REGISTRATION);
 
     try {
       const passwordHash = await bcrypt.hash(dto.password, 10);

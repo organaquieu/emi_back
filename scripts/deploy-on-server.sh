@@ -12,8 +12,20 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+echo "==> Disk space"
+df -h / /var/lib/docker 2>/dev/null || df -h /
+
+AVAIL_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
+if [ "${AVAIL_KB:-0}" -lt 2097152 ]; then
+  echo "WARN: less than 2 GB free on /. Cleaning Docker cache..."
+  docker builder prune -af 2>/dev/null || true
+  docker image prune -af 2>/dev/null || true
+  docker system prune -af 2>/dev/null || true
+  df -h /
+fi
+
 echo "==> Docker build & restart"
-docker compose -f docker-compose.prod.yaml build
+docker compose -f docker-compose.prod.yaml build --pull=false
 docker compose -f docker-compose.prod.yaml up -d
 
 echo "==> Database migrations"

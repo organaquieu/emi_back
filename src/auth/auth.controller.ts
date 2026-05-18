@@ -1,7 +1,15 @@
 import { Controller, Post, Body, Req, Inject } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service.js';
-import { ChangePasswordDto, LoginDto, RefreshDto, RegisterDto, SendRegistrationCodeDto } from './auth.dto.js';
+import {
+  ChangePasswordDto,
+  LoginDto,
+  RefreshDto,
+  RegisterDto,
+  ResetPasswordDto,
+  SendForgotPasswordCodeDto,
+  SendRegistrationCodeDto,
+} from './auth.dto.js';
 import { Public } from '../common/decorators/public.decorator.js';
 
 @ApiTags('auth')
@@ -31,6 +39,28 @@ export class AuthController {
   @ApiResponse({ status: 201 })
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
+  }
+
+  @Public()
+  @Post('forgot-password/send-code')
+  @ApiBody({ type: () => SendForgotPasswordCodeDto })
+  @ApiOperation({
+    summary: 'Забыли пароль: отправить код на email (шаг 1)',
+    description: 'Код отправляется только если email зарегистрирован. Код действует 15 минут.',
+  })
+  sendForgotPasswordCode(@Body() dto: SendForgotPasswordCodeDto) {
+    return this.authService.sendForgotPasswordCode(dto);
+  }
+
+  @Public()
+  @Post('forgot-password/reset')
+  @ApiBody({ type: () => ResetPasswordDto })
+  @ApiOperation({
+    summary: 'Забыли пароль: новый пароль по коду (шаг 2)',
+    description: 'newPassword и confirmPassword должны совпадать.',
+  })
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 
   @Public()

@@ -33,7 +33,33 @@ export class MailService {
     return this.transporter;
   }
 
+  private isSmtpConfigured(): boolean {
+    const host = this.config.get<string>('SMTP_HOST')?.trim();
+    const user = this.config.get<string>('SMTP_USER')?.trim();
+    const pass = this.config.get<string>('SMTP_PASS')?.trim();
+    return Boolean(host && user && pass);
+  }
+
+  private shouldLogOnly(): boolean {
+    if (this.config.get<string>('SMTP_LOG_ONLY') === 'true') return true;
+    const nodeEnv = this.config.get<string>('NODE_ENV') ?? 'development';
+    return nodeEnv !== 'production' && !this.isSmtpConfigured();
+  }
+
   async sendRegistrationCode(to: string, code: string): Promise<void> {
+    if (this.shouldLogOnly()) {
+      this.logger.warn(
+        `[mail] Registration code for ${to}: ${code} (SMTP_LOG_ONLY or dev without SMTP_HOST/USER/PASS)`,
+      );
+      return;
+    }
+
+    if (!this.isSmtpConfigured()) {
+      throw new InternalServerErrorException(
+        'SMTP is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS in .env (or SMTP_LOG_ONLY=true only for testing).',
+      );
+    }
+
     const from = this.config.get<string>('SMTP_FROM') ?? this.config.get<string>('SMTP_USER');
     const appName = this.config.get<string>('APP_NAME') ?? 'Emi';
 
@@ -47,11 +73,35 @@ export class MailService {
       <p>Если вы не регистрировались — просто удалите это письмо.</p>
     `;
 
-    const logOnly = this.config.get<string>('SMTP_LOG_ONLY') === 'true';
-    if (logOnly) {
-      this.logger.warn(`[SMTP_LOG_ONLY] Registration code for ${to}: ${code}`);
+    await this.getTransporter().sendMail({ from, to, subject, text, html });
+  }
+
+  async sendPasswordResetCode(to: string, code: string): Promise<void> {
+    if (this.shouldLogOnly()) {
+      this.logger.warn(
+        `[mail] Password reset code for ${to}: ${code} (SMTP_LOG_ONLY or dev without SMTP_HOST/USER/PASS)`,
+      );
       return;
     }
+
+    if (!this.isSmtpConfigured()) {
+      throw new InternalServerErrorException(
+        'SMTP is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS in .env (or SMTP_LOG_ONLY=true only for testing).',
+      );
+    }
+
+    const from = this.config.get<string>('SMTP_FROM') ?? this.config.get<string>('SMTP_USER');
+    const appName = this.config.get<string>('APP_NAME') ?? 'Emi';
+
+    const subject = `${appName}: код для сброса пароля`;
+    const text = `Код для сброса пароля: ${code}\n\nКод действует 15 минут. Если вы не запрашивали сброс — проигнорируйте письмо.`;
+    const html = `
+      <p>Здравствуйте!</p>
+      <p>Код для сброса пароля в <strong>${appName}</strong>:</p>
+      <p style="font-size:24px;font-weight:bold;letter-spacing:4px">${code}</p>
+      <p>Код действует <strong>15 минут</strong>.</p>
+      <p>Если вы не запрашивали сброс пароля — просто удалите это письмо.</p>
+    `;
 
     await this.getTransporter().sendMail({ from, to, subject, text, html });
   }
