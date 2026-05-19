@@ -15,15 +15,8 @@ import {
 import { ApiBearerAuth, ApiBody, ApiExtraModels, ApiOperation, ApiParam, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsArray, IsEnum, IsNumber, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
-import { Prisma } from '@prisma/client';
+import { Prisma, ReflectionStateChange } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
-
-enum ReflectionStateChangeDto {
-  BETTER = 'BETTER',
-  SLIGHTLY_BETTER = 'SLIGHTLY_BETTER',
-  NO_CHANGE = 'NO_CHANGE',
-  WORSE = 'WORSE',
-}
 
 class ReflectionEmotionItemDto {
   @ApiProperty({ type: String, example: 'Страх', description: 'Название эмоции' })
@@ -57,13 +50,13 @@ class CreateReflectionDto {
 
   @ApiProperty({
     type: String,
-    enum: ReflectionStateChangeDto,
+    enum: ReflectionStateChange,
     description:
-      'Стало ли легче: BETTER — легче, SLIGHTLY_BETTER — немного легче, NO_CHANGE — без изменений, WORSE — стало хуже',
-    example: ReflectionStateChangeDto.SLIGHTLY_BETTER,
+      'Стало ли легче: BETTER — легче, SLIGHTLY_BETTER — немного легче, NO_CHANGE — без изменений, WORSE — стало хуже, SKIPPED — пропущено',
+    example: ReflectionStateChange.SLIGHTLY_BETTER,
   })
-  @IsEnum(ReflectionStateChangeDto)
-  stateChange!: ReflectionStateChangeDto;
+  @IsEnum(ReflectionStateChange)
+  stateChange!: ReflectionStateChange;
 
   @ApiProperty({ type: String, required: false, description: 'Что планируете сделать дальше', example: 'Поговорить с другом' })
   @IsOptional()
@@ -83,10 +76,10 @@ class UpdateReflectionDto {
   @Type(() => ReflectionEmotionItemDto)
   emotions?: ReflectionEmotionItemDto[];
 
-  @ApiProperty({ type: String, enum: ReflectionStateChangeDto, required: false })
+  @ApiProperty({ type: String, enum: ReflectionStateChange, required: false })
   @IsOptional()
-  @IsEnum(ReflectionStateChangeDto)
-  stateChange?: ReflectionStateChangeDto;
+  @IsEnum(ReflectionStateChange)
+  stateChange?: ReflectionStateChange;
 
   @ApiProperty({ type: String, required: false })
   @IsOptional()

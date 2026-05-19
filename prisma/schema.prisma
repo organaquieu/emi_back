@@ -130,6 +130,7 @@ enum ReflectionStateChange {
   SLIGHTLY_BETTER
   NO_CHANGE
   WORSE
+  SKIPPED
 }
 
 model DiaryEntryEmotion {
