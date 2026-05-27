@@ -362,6 +362,17 @@ private async callEmotionWithRetry(
     }
   }
 
+
+private isSafetyRefusal(text: string): boolean {
+  const normalized = text.toLowerCase();
+
+  return (
+    normalized.includes('временно ограничены') ||
+    normalized.includes('связанные с чувствительными темами') ||
+    normalized.includes('не обладает собственным мнением') ||
+    normalized.includes('может содержаться неточная или ошибочная информация')
+  );
+}
 // НОВЫЙ МЕТОД для валидации эмоций из разрешенного списка
 private validateEmotions(
   emotions: Array<{ name: string; probability: number }>
@@ -508,6 +519,16 @@ async consult(@Req() req: any, @Body() body: AIConsultDto) {
     }
     
     if (!assistantReply?.trim()) throw lastError;
+
+    if (this.isSafetyRefusal(assistantReply)) {
+      return {
+        reply:
+          'Я не могу обсуждать эту тему. Если вам сейчас тяжело, можно обратиться к психологу, близким людям или в службу поддержки: 8-800-333-44-34.',
+        emotions: [],
+        suggested_next: [
+        ],
+      };
+    }
     
   } catch (error) {
     console.error('Reply generation failed:', error);
